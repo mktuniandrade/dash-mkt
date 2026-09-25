@@ -113,10 +113,9 @@ function formatDay(isoDay) {
   return `${d}/${m}`;
 }
 
-const BAR_AREA_HEIGHT = 160; // px, altura util pras barras (sem contar numero e label)
-const VISIBLE_DAYS = 10; // quantas colunas ficam visiveis de cada vez, sem contar scroll
-const BAR_COL_WIDTH = 52; // px por coluna, usado pra calcular a largura visivel do grafico
-const BAR_GAP = 10; // px de espaco entre colunas
+const BAR_AREA_HEIGHT = 200; // px, altura util pras barras (sem contar numero e label)
+const VISIBLE_DAYS = 10; // quantas colunas ficam cheias na largura da tela, o resto fica no scroll
+const BAR_GAP = 12; // px de espaco entre colunas
 
 function renderSection(account) {
   const maxLeads = Math.max(1, ...account.rows.map((r) => r.leads));
@@ -133,8 +132,6 @@ function renderSection(account) {
     })
     .join('');
 
-  const visibleWidth = VISIBLE_DAYS * BAR_COL_WIDTH + (VISIBLE_DAYS - 1) * BAR_GAP;
-
   return `
     <section class="card">
       <div class="card-header" style="background:${account.bg}">
@@ -144,7 +141,7 @@ function renderSection(account) {
           <span class="total-value" style="color:${account.color}">${account.total}</span>
         </div>
       </div>
-      <div class="chart" style="max-width:${visibleWidth}px">
+      <div class="chart">
         ${barsHtml}
       </div>
     </section>`;
@@ -216,7 +213,7 @@ app.get('/', async (req, res) => {
   .chart {
     display: flex;
     align-items: flex-end;
-    gap: 10px;
+    gap: ${BAR_GAP}px;
     overflow-x: auto;
     padding-bottom: 4px;
     scroll-behavior: smooth;
@@ -226,8 +223,7 @@ app.get('/', async (req, res) => {
     flex-direction: column;
     align-items: center;
     justify-content: flex-end;
-    flex: 0 0 52px;
-    width: 52px;
+    flex: 0 0 calc((100% - ${(VISIBLE_DAYS - 1) * BAR_GAP}px) / ${VISIBLE_DAYS});
   }
   .bar-value {
     font-size: 12px;
@@ -236,8 +232,8 @@ app.get('/', async (req, res) => {
     margin-bottom: 4px;
   }
   .bar {
-    width: 100%;
-    max-width: 32px;
+    width: 60%;
+    max-width: 56px;
     border-radius: 4px 4px 0 0;
   }
   .bar-label {
