@@ -104,16 +104,21 @@ function formatDay(isoDay) {
   return `${d}/${m}`;
 }
 
+const BAR_AREA_HEIGHT = 160; // px, altura util pras barras (sem contar numero e label)
+
 function renderSection(account) {
-  const rowsHtml = [...account.rows]
-    .reverse() // dia mais recente primeiro
-    .map(
-      (r) => `
-        <tr>
-          <td>${formatDay(r.day)}</td>
-          <td class="num">${r.leads}</td>
-        </tr>`
-    )
+  const maxLeads = Math.max(1, ...account.rows.map((r) => r.leads));
+
+  const barsHtml = account.rows // ordem cronologica, dia 1 -> hoje, igual ao exemplo
+    .map((r) => {
+      const barHeight = Math.max(2, Math.round((r.leads / maxLeads) * BAR_AREA_HEIGHT));
+      return `
+        <div class="bar-col">
+          <span class="bar-value">${r.leads}</span>
+          <div class="bar" style="height:${barHeight}px"></div>
+          <span class="bar-label">${formatDay(r.day)}</span>
+        </div>`;
+    })
     .join('');
 
   return `
@@ -125,14 +130,9 @@ function renderSection(account) {
           <span class="total-value">${account.total}</span>
         </div>
       </div>
-      <table>
-        <thead>
-          <tr><th>Dia</th><th>Leads</th></tr>
-        </thead>
-        <tbody>
-          ${rowsHtml}
-        </tbody>
-      </table>
+      <div class="chart">
+        ${barsHtml}
+      </div>
     </section>`;
 }
 
@@ -162,7 +162,7 @@ app.get('/', async (req, res) => {
   }
   .grid {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 20px;
   }
   .card {
@@ -170,21 +170,15 @@ app.get('/', async (req, res) => {
     border-radius: 10px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     padding: 16px 18px;
-    flex: 1;
-    min-width: 260px;
-    max-height: 80vh;
-    overflow-y: auto;
+    width: 100%;
   }
   .card-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 12px;
+    margin-bottom: 16px;
     padding-bottom: 10px;
     border-bottom: 1px solid #eee;
-    position: sticky;
-    top: 0;
-    background: #fff;
   }
   .card-header h2 {
     font-size: 16px;
@@ -204,26 +198,38 @@ app.get('/', async (req, res) => {
     font-weight: 700;
     color: #0a58ff;
   }
-  table {
+  .chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .bar-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    flex: 1;
+    min-width: 26px;
+  }
+  .bar-value {
+    font-size: 11px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 4px;
+  }
+  .bar {
     width: 100%;
-    border-collapse: collapse;
-    font-size: 14px;
+    max-width: 28px;
+    background: #0a58ff;
+    border-radius: 4px 4px 0 0;
   }
-  th, td {
-    text-align: left;
-    padding: 6px 4px;
-  }
-  th {
+  .bar-label {
+    font-size: 10px;
     color: #888;
-    font-weight: 500;
-    font-size: 12px;
-    border-bottom: 1px solid #eee;
-  }
-  td.num, th:last-child {
-    text-align: right;
-  }
-  tr:nth-child(even) {
-    background: #fafafa;
+    margin-top: 6px;
+    white-space: nowrap;
   }
   .updated {
     margin-top: 16px;
