@@ -6,10 +6,13 @@ const META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
 const GRAPH_VERSION = process.env.GRAPH_VERSION || 'v26.0';
 
 // Ordem fixa de exibicao: Uniandrade, Ibirapuera, SMG
+// Cor de cada uma pra diferenciar rapido no dash (mesma familia de azul pra
+// Uniandrade/Ibirapuera, mas com tom diferente pra nao confundir; SMG em
+// dourado, mais legivel que amarelo puro em fundo branco)
 const ACCOUNTS = [
-  { name: 'Uniandrade', id: '107419093141255' },
-  { name: 'Ibirapuera', id: '113511182725885' },
-  { name: 'SMG', id: '102024700446622' },
+  { name: 'Uniandrade', id: '107419093141255', color: '#2563EB', bg: '#DBEAFE' },
+  { name: 'Ibirapuera', id: '113511182725885', color: '#0D9488', bg: '#CCFBF1' },
+  { name: 'SMG', id: '102024700446622', color: '#D97706', bg: '#FEF3C7' },
 ];
 
 // Quando o form estiver rodando, o lead dele vem como action_type "lead".
@@ -92,7 +95,13 @@ async function getDashboardData() {
     const byDay = await fetchAccountInsights(account.id);
     const rows = days.map((day) => ({ day, leads: byDay[day] || 0 }));
     const total = rows.reduce((sum, r) => sum + r.leads, 0);
-    results.push({ name: account.name, rows, total });
+    results.push({
+      name: account.name,
+      color: account.color,
+      bg: account.bg,
+      rows,
+      total,
+    });
   }
 
   cache = { data: results, fetchedAt: now };
@@ -105,6 +114,9 @@ function formatDay(isoDay) {
 }
 
 const BAR_AREA_HEIGHT = 160; // px, altura util pras barras (sem contar numero e label)
+const VISIBLE_DAYS = 10; // quantas colunas ficam visiveis de cada vez, sem contar scroll
+const BAR_COL_WIDTH = 52; // px por coluna, usado pra calcular a largura visivel do grafico
+const BAR_GAP = 10; // px de espaco entre colunas
 
 function renderSection(account) {
   const maxLeads = Math.max(1, ...account.rows.map((r) => r.leads));
@@ -115,22 +127,24 @@ function renderSection(account) {
       return `
         <div class="bar-col">
           <span class="bar-value">${r.leads}</span>
-          <div class="bar" style="height:${barHeight}px"></div>
+          <div class="bar" style="height:${barHeight}px;background:${account.color}"></div>
           <span class="bar-label">${formatDay(r.day)}</span>
         </div>`;
     })
     .join('');
 
+  const visibleWidth = VISIBLE_DAYS * BAR_COL_WIDTH + (VISIBLE_DAYS - 1) * BAR_GAP;
+
   return `
     <section class="card">
-      <div class="card-header">
-        <h2>${account.name}</h2>
+      <div class="card-header" style="background:${account.bg}">
+        <h2 style="color:${account.color}">${account.name}</h2>
         <div class="total">
           <span class="total-label">Total do mes</span>
-          <span class="total-value">${account.total}</span>
+          <span class="total-value" style="color:${account.color}">${account.total}</span>
         </div>
       </div>
-      <div class="chart">
+      <div class="chart" style="max-width:${visibleWidth}px">
         ${barsHtml}
       </div>
     </section>`;
@@ -147,6 +161,7 @@ app.get('/', async (req, res) => {
 <meta charset="UTF-8">
 <title>Leads - Uniandrade / Ibirapuera / SMG</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="1800">
 <style>
   * { box-sizing: border-box; }
   body {
@@ -176,13 +191,14 @@ app.get('/', async (req, res) => {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 16px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid #eee;
+    margin: -16px -18px 16px -18px;
+    padding: 12px 18px;
+    border-radius: 10px 10px 0 0;
   }
   .card-header h2 {
     font-size: 16px;
     margin: 0;
+    font-weight: 700;
   }
   .total {
     text-align: right;
@@ -190,43 +206,42 @@ app.get('/', async (req, res) => {
   .total-label {
     display: block;
     font-size: 11px;
-    color: #888;
+    color: #666;
   }
   .total-value {
     display: block;
     font-size: 20px;
     font-weight: 700;
-    color: #0a58ff;
   }
   .chart {
     display: flex;
     align-items: flex-end;
-    gap: 6px;
+    gap: 10px;
     overflow-x: auto;
     padding-bottom: 4px;
+    scroll-behavior: smooth;
   }
   .bar-col {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: flex-end;
-    flex: 1;
-    min-width: 26px;
+    flex: 0 0 52px;
+    width: 52px;
   }
   .bar-value {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: #333;
     margin-bottom: 4px;
   }
   .bar {
     width: 100%;
-    max-width: 28px;
-    background: #0a58ff;
+    max-width: 32px;
     border-radius: 4px 4px 0 0;
   }
   .bar-label {
-    font-size: 10px;
+    font-size: 11px;
     color: #888;
     margin-top: 6px;
     white-space: nowrap;
@@ -244,6 +259,11 @@ app.get('/', async (req, res) => {
     ${sectionsHtml}
   </div>
   <div class="updated">Atualizado a cada 10 minutos. Ultima busca: ${new Date(cache.fetchedAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}</div>
+  <script>
+    document.querySelectorAll('.chart').forEach(function (el) {
+      el.scrollLeft = el.scrollWidth;
+    });
+  </script>
 </body>
 </html>`);
   } catch (err) {
