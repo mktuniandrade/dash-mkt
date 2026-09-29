@@ -9,11 +9,18 @@ const GRAPH_VERSION = process.env.GRAPH_VERSION || 'v26.0';
 // Cor de cada uma pra diferenciar rapido no dash (mesma familia de azul pra
 // Uniandrade/Ibirapuera, mas com tom diferente pra nao confundir; SMG em
 // dourado, mais legivel que amarelo puro em fundo branco)
+// alphaInstituicaoId = InstituicaoID usado na API da Alfa pra essa unidade
 const ACCOUNTS = [
-  { name: 'Uniandrade', id: '107419093141255', color: '#2563EB', bg: '#DBEAFE' },
-  { name: 'Ibirapuera', id: '113511182725885', color: '#0D9488', bg: '#CCFBF1' },
-  { name: 'SMG', id: '102024700446622', color: '#D97706', bg: '#FEF3C7' },
+  { name: 'Uniandrade', id: '107419093141255', alphaInstituicaoId: 1, color: '#2563EB', bg: '#DBEAFE' },
+  { name: 'Ibirapuera', id: '113511182725885', alphaInstituicaoId: 4, color: '#0D9488', bg: '#CCFBF1' },
+  { name: 'SMG', id: '102024700446622', alphaInstituicaoId: 3, color: '#D97706', bg: '#FEF3C7' },
 ];
+
+// API da Alfa (cadastro real do lead). Ano de ingresso fixo em 2027 e
+// periodo 1, conforme confirmado. Mes/Dia mudam por chamada.
+const ALPHA_BASE_URL = 'https://alpha.uniandrade.br/WsApiDashboard/api/Dashboard/Campanha';
+const ALPHA_ANO_INGRESSO = 2027;
+const ALPHA_PERIODO_INGRESSO = 1;
 
 // Quando o form estiver rodando, o lead dele vem como action_type "lead".
 // O lead do WhatsApp (clique -> conversa) vem como conversa iniciada.
@@ -82,6 +89,38 @@ async function fetchAccountInsights(accountId) {
   return byDay;
 }
 
+// Soma "visitantes" de todas as campanhas retornadas naquele dia/instituicao.
+// "visitantes" e o cadastro bruto (lead) na Alfa, confirmado pelo Gabriel.
+async function fetchAlphaVisitantesForDay(instituicaoId, month, day) {
+  const url = new URL(ALPHA_BASE_URL);
+  url.searchParams.set('AnoIngresso', String(ALPHA_ANO_INGRESSO));
+  url.searchParams.set('PeriodoIngresso', String(ALPHA_PERIODO_INGRESSO));
+  url.searchParams.set('Mes', String(month));
+  url.searchParams.set('Dia', String(day));
+  url.searchParams.set('InstituicaoID', String(instituicaoId));
+
+  const res = await fetch(url.toString());
+  const json = await res.json();
+
+  if (!Array.isArray(json)) return 0;
+  return json.reduce((sum, campanha) => sum + Number(campanha.visitantes || 0), 0);
+}
+
+async function fetchAlphaByDay(instituicaoId, isoDays) {
+  const byDay = {};
+  await Promise.all(
+    isoDays.map(async (isoDay) => {
+      const [, m, d] = isoDay.split('-').map(Number);
+      try {
+        byDay[isoDay] = await fetchAlphaVisitantesForDay(instituicaoId, m, d);
+      } catch (err) {
+        byDay[isoDay] = null; // falha pontual pra aquele dia, nao derruba o resto
+      }
+    })
+  );
+  return byDay;
+}
+
 async function getDashboardData() {
   const now = Date.now();
   if (cache.data && now - cache.fetchedAt < CACHE_TTL_MS) {
@@ -92,15 +131,26 @@ async function getDashboardData() {
   const results = [];
 
   for (const account of ACCOUNTS) {
-    const byDay = await fetchAccountInsights(account.id);
-    const rows = days.map((day) => ({ day, leads: byDay[day] || 0 }));
-    const total = rows.reduce((sum, r) => sum + r.leads, 0);
+    const [metaByDay, alphaByDay] = await Promise.all([
+      fetchAccountInsights(account.id),
+      fetchAlphaByDay(account.alphaInstituicaoId, days),
+    ]);
+
+    const rows = days.map((day) => ({
+      day,
+      metaLeads: metaByDay[day] || 0,
+      alphaLeads: alphaByDay[day] ?? 0,
+    }));
+    const totalMeta = rows.reduce((sum, r) => sum + r.metaLeads, 0);
+    const totalAlpha = rows.reduce((sum, r) => sum + (r.alphaLeads || 0), 0);
+
     results.push({
       name: account.name,
       color: account.color,
       bg: account.bg,
       rows,
-      total,
+      totalMeta,
+      totalAlpha,
     });
   }
 
@@ -118,15 +168,31 @@ const VISIBLE_DAYS = 10; // quantas colunas ficam cheias na largura da tela, o r
 const BAR_GAP = 12; // px de espaco entre colunas
 
 function renderSection(account) {
-  const maxLeads = Math.max(1, ...account.rows.map((r) => r.leads));
+  const maxLeads = Math.max(
+    1,
+    ...account.rows.map((r) => Math.max(r.metaLeads, r.alphaLeads || 0))
+  );
 
-  const barsHtml = account.rows // ordem cronologica, dia 1 -> hoje, igual ao exemplo
+  const barsHtml = account.rows // ordem cronologica, dia 1 -> hoje
     .map((r) => {
-      const barHeight = Math.max(2, Math.round((r.leads / maxLeads) * BAR_AREA_HEIGHT));
+      const metaHeight = Math.max(2, Math.round((r.metaLeads / maxLeads) * BAR_AREA_HEIGHT));
+      const alphaValue = r.alphaLeads;
+      const alphaHeight =
+        alphaValue === null ? 0 : Math.max(2, Math.round((alphaValue / maxLeads) * BAR_AREA_HEIGHT));
+      const alphaDisplay = alphaValue === null ? '-' : alphaValue;
+
       return `
-        <div class="bar-col">
-          <span class="bar-value">${r.leads}</span>
-          <div class="bar" style="height:${barHeight}px;background:${account.color}"></div>
+        <div class="day-group">
+          <div class="mini-bars">
+            <div class="mini-bar-wrap">
+              <span class="bar-value">${r.metaLeads}</span>
+              <div class="bar" style="height:${metaHeight}px;background:${account.color}"></div>
+            </div>
+            <div class="mini-bar-wrap">
+              <span class="bar-value alpha-value">${alphaDisplay}</span>
+              <div class="bar alpha" style="height:${alphaHeight}px;background:${account.color}55"></div>
+            </div>
+          </div>
           <span class="bar-label">${formatDay(r.day)}</span>
         </div>`;
     })
@@ -136,9 +202,15 @@ function renderSection(account) {
     <section class="card">
       <div class="card-header" style="background:${account.bg}">
         <h2 style="color:${account.color}">${account.name}</h2>
-        <div class="total">
-          <span class="total-label">Total do mes</span>
-          <span class="total-value" style="color:${account.color}">${account.total}</span>
+        <div class="totals">
+          <div class="total">
+            <span class="total-label">Meta (mes)</span>
+            <span class="total-value" style="color:${account.color}">${account.totalMeta}</span>
+          </div>
+          <div class="total">
+            <span class="total-label">Alfa (mes)</span>
+            <span class="total-value alpha-value" style="color:${account.color}">${account.totalAlpha}</span>
+          </div>
         </div>
       </div>
       <div class="chart">
@@ -200,6 +272,10 @@ app.get('/', async (req, res) => {
   .total {
     text-align: right;
   }
+  .totals {
+    display: flex;
+    gap: 20px;
+  }
   .total-label {
     display: block;
     font-size: 11px;
@@ -210,6 +286,9 @@ app.get('/', async (req, res) => {
     font-size: 20px;
     font-weight: 700;
   }
+  .total-value.alpha-value {
+    opacity: 0.65;
+  }
   .chart {
     display: flex;
     align-items: flex-end;
@@ -218,12 +297,28 @@ app.get('/', async (req, res) => {
     padding-bottom: 4px;
     scroll-behavior: smooth;
   }
-  .bar-col {
+  .day-group {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: flex-end;
     flex: 0 0 calc((100% - ${(VISIBLE_DAYS - 1) * BAR_GAP}px) / ${VISIBLE_DAYS});
+  }
+  .mini-bars {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 4px;
+    width: 100%;
+    height: ${BAR_AREA_HEIGHT}px;
+  }
+  .mini-bar-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    width: 50%;
+    height: 100%;
   }
   .bar-value {
     font-size: 12px;
@@ -231,9 +326,12 @@ app.get('/', async (req, res) => {
     color: #333;
     margin-bottom: 4px;
   }
+  .bar-value.alpha-value {
+    color: #777;
+  }
   .bar {
-    width: 60%;
-    max-width: 56px;
+    width: 100%;
+    max-width: 26px;
     border-radius: 4px 4px 0 0;
   }
   .bar-label {
@@ -241,6 +339,24 @@ app.get('/', async (req, res) => {
     color: #888;
     margin-top: 6px;
     white-space: nowrap;
+  }
+  .legend {
+    display: flex;
+    gap: 16px;
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 16px;
+  }
+  .legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .legend .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    display: inline-block;
   }
   .updated {
     margin-top: 16px;
@@ -251,6 +367,10 @@ app.get('/', async (req, res) => {
 </head>
 <body>
   <h1>Leads do mes</h1>
+  <div class="legend">
+    <span><span class="dot" style="background:#555"></span> Meta (entrou no anuncio)</span>
+    <span><span class="dot" style="background:#555;opacity:0.4"></span> Alfa (cadastrado de fato)</span>
+  </div>
   <div class="grid">
     ${sectionsHtml}
   </div>
