@@ -121,9 +121,9 @@ async function fetchAlphaByDay(instituicaoId, isoDays) {
   return byDay;
 }
 
-async function getDashboardData() {
+async function getDashboardData(force = false) {
   const now = Date.now();
-  if (cache.data && now - cache.fetchedAt < CACHE_TTL_MS) {
+  if (!force && cache.data && now - cache.fetchedAt < CACHE_TTL_MS) {
     return cache.data;
   }
 
@@ -221,7 +221,8 @@ function renderSection(account) {
 
 app.get('/', async (req, res) => {
   try {
-    const data = await getDashboardData();
+    const force = req.query.force === '1';
+    const data = await getDashboardData(force);
     const sectionsHtml = data.map(renderSection).join('\n');
 
     res.send(`<!DOCTYPE html>
@@ -242,7 +243,7 @@ app.get('/', async (req, res) => {
   }
   h1 {
     font-size: 20px;
-    margin: 0 0 20px 0;
+    margin: 0;
   }
   .grid {
     display: flex;
@@ -363,10 +364,33 @@ app.get('/', async (req, res) => {
     font-size: 12px;
     color: #999;
   }
+  .top-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+  }
+  .refresh-btn {
+    background: #1a1a1a;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .refresh-btn:hover {
+    background: #333;
+  }
 </style>
 </head>
 <body>
-  <h1>Leads do mes</h1>
+  <div class="top-row">
+    <h1>Leads do mes</h1>
+    <a href="/?force=1" class="refresh-btn">Atualizar agora</a>
+  </div>
   <div class="legend">
     <span><span class="dot" style="background:#555"></span> Meta (entrou no anuncio)</span>
     <span><span class="dot" style="background:#555;opacity:0.4"></span> Alfa (cadastrado de fato)</span>
