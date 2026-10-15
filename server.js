@@ -89,9 +89,12 @@ async function fetchAccountInsights(accountId) {
   return byDay;
 }
 
-// Soma "visitantes" de todas as campanhas retornadas naquele dia/instituicao.
-// "visitantes" e o cadastro bruto (lead) na Alfa, confirmado pelo Gabriel.
-async function fetchAlphaVisitantesForDay(instituicaoId, month, day) {
+// Soma, entre todas as campanhas retornadas naquele dia/instituicao:
+// - visitantes: cadastro bruto (lead) na Alfa, confirmado pelo Gabriel
+// - inscricoes: virou inscrito (etapa seguinte do funil)
+// - matriculados: virou matricula
+// Tudo vem na mesma chamada, entao nao aumenta o numero de requisicoes.
+async function fetchAlphaFunnelForDay(instituicaoId, month, day) {
   const url = new URL(ALPHA_BASE_URL);
   url.searchParams.set('AnoIngresso', String(ALPHA_ANO_INGRESSO));
   url.searchParams.set('PeriodoIngresso', String(ALPHA_PERIODO_INGRESSO));
@@ -102,8 +105,15 @@ async function fetchAlphaVisitantesForDay(instituicaoId, month, day) {
   const res = await fetch(url.toString());
   const json = await res.json();
 
-  if (!Array.isArray(json)) return 0;
-  return json.reduce((sum, campanha) => sum + Number(campanha.visitantes || 0), 0);
+  const funnel = { visitantes: 0, inscricoes: 0, matriculados: 0 };
+  if (!Array.isArray(json)) return funnel;
+
+  for (const campanha of json) {
+    funnel.visitantes += Number(campanha.visitantes || 0);
+    funnel.inscricoes += Number(campanha.inscricoes || 0);
+    funnel.matriculados += Number(campanha.matriculados || 0);
+  }
+  return funnel;
 }
 
 async function fetchAlphaByDay(instituicaoId, isoDays) {
@@ -112,7 +122,7 @@ async function fetchAlphaByDay(instituicaoId, isoDays) {
     isoDays.map(async (isoDay) => {
       const [, m, d] = isoDay.split('-').map(Number);
       try {
-        byDay[isoDay] = await fetchAlphaVisitantesForDay(instituicaoId, m, d);
+        byDay[isoDay] = await fetchAlphaFunnelForDay(instituicaoId, m, d);
       } catch (err) {
         byDay[isoDay] = null; // falha pontual pra aquele dia, nao derruba o resto
       }
@@ -136,21 +146,28 @@ async function getDashboardData(force = false) {
       fetchAlphaByDay(account.alphaInstituicaoId, days),
     ]);
 
-    const rows = days.map((day) => ({
-      day,
-      metaLeads: metaByDay[day] || 0,
-      alphaLeads: alphaByDay[day] ?? 0,
-    }));
-    const totalMeta = rows.reduce((sum, r) => sum + r.metaLeads, 0);
-    const totalAlpha = rows.reduce((sum, r) => sum + (r.alphaLeads || 0), 0);
+    // alpha = null quando a chamada daquele dia falhou (aparece "-" na tela)
+    const rows = days.map((day) => {
+      const alpha = alphaByDay[day] ?? null;
+      return {
+        day,
+        metaLeads: metaByDay[day] || 0,
+        alphaLeads: alpha ? alpha.visitantes : null,
+        inscritos: alpha ? alpha.inscricoes : null,
+        matriculados: alpha ? alpha.matriculados : null,
+      };
+    });
+    const sum = (key) => rows.reduce((total, r) => total + (r[key] || 0), 0);
 
     results.push({
       name: account.name,
       color: account.color,
       bg: account.bg,
       rows,
-      totalMeta,
-      totalAlpha,
+      totalMeta: sum('metaLeads'),
+      totalAlpha: sum('alphaLeads'),
+      totalInscritos: sum('inscritos'),
+      totalMatriculados: sum('matriculados'),
     });
   }
 
@@ -167,30 +184,37 @@ const BAR_AREA_HEIGHT = 200; // px, altura util pras barras (sem contar numero e
 const VISIBLE_DAYS = 10; // quantas colunas ficam cheias na largura da tela, o resto fica no scroll
 const BAR_GAP = 12; // px de espaco entre colunas
 
+// Altura da barra proporcional ao maior valor do grafico; null (falha) = sem barra
+function barHeight(value, maxValue) {
+  if (value === null) return 0;
+  return Math.max(2, Math.round((value / maxValue) * BAR_AREA_HEIGHT));
+}
+
 function renderSection(account) {
-  const maxLeads = Math.max(
+  const maxValue = Math.max(
     1,
-    ...account.rows.map((r) => Math.max(r.metaLeads, r.alphaLeads || 0))
+    ...account.rows.map((r) => Math.max(r.metaLeads, r.alphaLeads || 0, r.inscritos || 0))
   );
 
   const barsHtml = account.rows // ordem cronologica, dia 1 -> hoje
     .map((r) => {
-      const metaHeight = Math.max(2, Math.round((r.metaLeads / maxLeads) * BAR_AREA_HEIGHT));
-      const alphaValue = r.alphaLeads;
-      const alphaHeight =
-        alphaValue === null ? 0 : Math.max(2, Math.round((alphaValue / maxLeads) * BAR_AREA_HEIGHT));
-      const alphaDisplay = alphaValue === null ? '-' : alphaValue;
+      const alphaDisplay = r.alphaLeads === null ? '-' : r.alphaLeads;
+      const inscritosDisplay = r.inscritos === null ? '-' : r.inscritos;
 
       return `
         <div class="day-group">
           <div class="mini-bars">
             <div class="mini-bar-wrap">
               <span class="bar-value">${r.metaLeads}</span>
-              <div class="bar" style="height:${metaHeight}px;background:${account.color}"></div>
+              <div class="bar" style="height:${barHeight(r.metaLeads, maxValue)}px;background:${account.color}"></div>
             </div>
             <div class="mini-bar-wrap">
               <span class="bar-value alpha-value">${alphaDisplay}</span>
-              <div class="bar alpha" style="height:${alphaHeight}px;background:${account.color}55"></div>
+              <div class="bar" style="height:${barHeight(r.alphaLeads, maxValue)}px;background:${account.color}55"></div>
+            </div>
+            <div class="mini-bar-wrap">
+              <span class="bar-value alpha-value">${inscritosDisplay}</span>
+              <div class="bar" style="height:${barHeight(r.inscritos, maxValue)}px;background:${account.color}22;border:2px solid ${account.color};border-bottom:none"></div>
             </div>
           </div>
           <span class="bar-label">${formatDay(r.day)}</span>
@@ -210,6 +234,14 @@ function renderSection(account) {
           <div class="total">
             <span class="total-label">Alfa (mes)</span>
             <span class="total-value alpha-value" style="color:${account.color}">${account.totalAlpha}</span>
+          </div>
+          <div class="total">
+            <span class="total-label">Inscritos (mes)</span>
+            <span class="total-value alpha-value" style="color:${account.color}">${account.totalInscritos}</span>
+          </div>
+          <div class="total">
+            <span class="total-label">Matriculas (mes)</span>
+            <span class="total-value" style="color:${account.color}">${account.totalMatriculados}</span>
           </div>
         </div>
       </div>
@@ -309,7 +341,7 @@ app.get('/', async (req, res) => {
     display: flex;
     align-items: flex-end;
     justify-content: center;
-    gap: 4px;
+    gap: 3px;
     width: 100%;
     height: ${BAR_AREA_HEIGHT}px;
   }
@@ -318,11 +350,11 @@ app.get('/', async (req, res) => {
     flex-direction: column;
     align-items: center;
     justify-content: flex-end;
-    width: 50%;
+    width: 33.33%;
     height: 100%;
   }
   .bar-value {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     color: #333;
     margin-bottom: 4px;
@@ -332,8 +364,9 @@ app.get('/', async (req, res) => {
   }
   .bar {
     width: 100%;
-    max-width: 26px;
+    max-width: 22px;
     border-radius: 4px 4px 0 0;
+    box-sizing: border-box;
   }
   .bar-label {
     font-size: 11px;
@@ -394,6 +427,7 @@ app.get('/', async (req, res) => {
   <div class="legend">
     <span><span class="dot" style="background:#555"></span> Meta (entrou no anuncio)</span>
     <span><span class="dot" style="background:#555;opacity:0.4"></span> Alfa (cadastrado de fato)</span>
+    <span><span class="dot" style="background:#5551;border:2px solid #555"></span> Inscritos (virou inscricao)</span>
   </div>
   <div class="grid">
     ${sectionsHtml}
